@@ -1,6 +1,6 @@
 ---
 title: "STAT/MATH 495: Problem Set 07"
-author: "WRITE YOUR NAME(S) HERE"
+author: "Brendan Seto"
 date: "2017-10-24"
 output:
   html_document:
@@ -10,6 +10,7 @@ output:
     collapsed: false
     smooth_scroll: false
     df_print: kable
+    code_fold: hide
 ---
 
 ```{r setup, include=FALSE}
@@ -22,6 +23,8 @@ set.seed(76)
 library(tidyverse)
 library(broom)
 library(knitr)
+library(gridExtra)
+library(ROCR)
 
 train <- read_csv("data/cs-training.csv") %>% 
   rename(Id = X1)
@@ -30,25 +33,64 @@ test <- read_csv("data/cs-test.csv") %>%
 submission <- read_csv("data/sampleEntry.csv")
 ```
 
-Information on the competition can be found [here](https://www.kaggle.com/c/GiveMeSomeCredit/data).
-
-
-
-# Collaboration
-
-Please indicate who you collaborated with on this assignment: 
-
-
-
 # Build binary classifier
+
+Outcome variable:
+whether or not someone experienced 90 days past due delinquency or worse in the last 2 years
 
 Build the binary classifier based on a single predictor variable: `DebtRatio`,
 `age`, or `MonthlyIncome`. Justify this choice.
 
-```{r}
+**Data Exploration: Is there a Difference in our three predictors?**
+```{r, warning=FALSE}
+trainM <- train %>% sample_frac(0.8)
+testM <- anti_join(train, trainM, by = "Id")
 
+
+# Age
+m_age <- glm(SeriousDlqin2yrs~age, data=trainM, family = "binomial")
+
+predictions_a <- m_age %>% 
+  broom::augment(newdata=testM) %>% 
+  mutate(p_hat = 1/(1 + exp(-.fitted)))
+
+a <- ggplot(NULL) +
+  geom_point(data=predictions_a, aes(x=age, y=p_hat)) +
+  labs(x="Age", y="p_hat")
+
+
+# Monthly Income
+m_MI <- glm(SeriousDlqin2yrs~MonthlyIncome, data=trainM, family = "binomial")
+
+predictions_MI <- m_MI %>% 
+  broom::augment(newdata=testM) %>% 
+  mutate(p_hat = 1/(1 + exp(-.fitted)))
+
+MI <- ggplot(NULL) +
+  geom_point(data=predictions_MI, aes(x=MonthlyIncome, y=p_hat))+
+  scale_x_log10()+
+  labs(x="Monthly Income", y="p_hat")
+
+# Debt Ratio
+m_dr <- glm(SeriousDlqin2yrs~DebtRatio, data=trainM, family = "binomial")
+
+predictions_DR <- m_dr %>% 
+  broom::augment(newdata=testM) %>% 
+  mutate(p_hat = 1/(1 + exp(-.fitted)))
+
+DR <- ggplot(NULL) +
+  geom_point(data=predictions_DR, aes(x=DebtRatio, y=p_hat)) +
+  labs(x="Debt Ratio", y="p_hat")
 ```
 
+
+##Probability of having a delinquency by variable
+```{r}
+grid.arrange(a,DR,MI, ncol = 3)
+```
+
+
+I'm choosing to use monthly income.  I did mess with the scale (put it in log), but it is clearly has the best probability distribution with enough information to seperate people into groups.  Age never has enough of a proportion to be selective, while Debt Ratio's probabilities are not spread out enough.  Thus Monthly Income it is!
 
 
 # ROC curve
@@ -56,7 +98,20 @@ Build the binary classifier based on a single predictor variable: `DebtRatio`,
 Based on the ultimate classifier you choose, plot a corresponding ROC curve.
 
 ```{r}
+# This bit of code computes the ROC curve
+pred <- prediction(predictions = predictions_MI$p_hat, labels = predictions_MI$SeriousDlqin2yrs)
+perf <- performance(pred, "tpr","fpr")
 
+# This bit of code computes the Area Under the Curve
+auc <- as.numeric(performance(pred,"auc")@y.values)
+auc
+```
+
+```{r}
+ggplot(NULL, aes(unlist(perf@x.values), unlist(perf@y.values)))+geom_line(color = "red")+
+  geom_abline(slope=1, linetype = "longdash")+
+  labs(list(title = "ROC Curve: Monthly Income Predicting Serious 2-Year Delinquency", x = "Specificity", y = "Sensitivity"))+
+  theme(plot.title = element_text(face = "bold"))
 ```
 
 
@@ -67,5 +122,34 @@ Instead of using any predictor information as you did above, switch your
 predictions to random guesses and plot the resulting ROC curve.
 
 ```{r}
+pred1 <- prediction(predictions = ifelse(runif(30000)>0.5, 1,0), labels = predictions_MI$SeriousDlqin2yrs)
+perf1 <- performance(pred1, "tpr","fpr")
 
+# This bit of code computes the Area Under the Curve
+auc1 <- as.numeric(performance(pred1,"auc")@y.values)
+auc1
 ```
+
+```{r}
+ggplot(NULL, aes(unlist(perf1@x.values), unlist(perf1@y.values)))+geom_line(color = "red")+
+  geom_abline(slope=1, linetype = "longdash")+
+  labs(list(title = "ROC Curve: Randomly Predicting Serious 2-Year Delinquency", x = "Specificity", y = "Sensitivity"))+
+  theme(plot.title = element_text(face = "bold"))
+```
+
+We can see that the curve does not deviate very much at all from y=x.  
+
+# Submission
+
+```{r}
+test[is.na(test$MonthlyIncome),"MonthlyIncome"] <- median(test$MonthlyIncome, na.rm=TRUE)
+
+Submission <- m_MI %>% 
+  broom::augment(newdata=test) %>% 
+  mutate(Probability = 1/(1 + exp(-.fitted))) %>% 
+  select(Id, Probability)
+
+write.csv(Submission, "sub.csv")
+```
+
+![My Kaggle Submission](proof.png)
